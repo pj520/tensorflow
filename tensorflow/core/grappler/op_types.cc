@@ -35,7 +35,11 @@ bool IsAdd(const NodeDef& node) {
 
 bool IsAddN(const NodeDef& node) { return node.op() == "AddN"; }
 
+bool IsAll(const NodeDef& node) { return node.op() == "All"; }
+
 bool IsAngle(const NodeDef& node) { return node.op() == "Angle"; }
+
+bool IsAny(const NodeDef& node) { return node.op() == "Any"; }
 
 bool IsAnyDiv(const NodeDef& node) {
   return node.op() == "RealDiv" || node.op() == "Div" ||
@@ -52,6 +56,8 @@ bool IsAssert(const NodeDef& node) { return node.op() == "Assert"; }
 
 bool IsAtan2(const NodeDef& node) { return node.op() == "Atan2"; }
 
+bool IsBetainc(const NodeDef& node) { return node.op() == "Betainc"; }
+
 bool IsBiasAdd(const NodeDef& node) {
   return node.op() == "BiasAdd" || node.op() == "BiasAddV1";
 }
@@ -59,6 +65,8 @@ bool IsBiasAdd(const NodeDef& node) {
 bool IsBiasAddGrad(const NodeDef& node) { return node.op() == "BiasAddGrad"; }
 
 bool IsBitcast(const NodeDef& node) { return node.op() == "Bitcast"; }
+
+bool IsCast(const NodeDef& node) { return node.op() == "Cast"; }
 
 bool IsComplex(const NodeDef& node) { return node.op() == "Complex"; }
 
@@ -115,6 +123,8 @@ bool IsExit(const NodeDef& node) {
   return op == "Exit" || op == "RefExit";
 }
 
+bool IsFill(const NodeDef& node) { return node.op() == "Fill"; }
+
 bool IsFloorDiv(const NodeDef& node) { return node.op() == "FloorDiv"; }
 
 bool IsFloorMod(const NodeDef& node) { return node.op() == "FloorMod"; }
@@ -127,6 +137,10 @@ bool IsFusedBatchNormGrad(const NodeDef& node) {
 bool IsGreater(const NodeDef& node) { return node.op() == "Greater"; }
 
 bool IsGreaterEqual(const NodeDef& node) { return node.op() == "GreaterEqual"; }
+
+bool IsHistogramSummary(const NodeDef& node) {
+  return node.op() == "HistogramSummary";
+}
 
 bool IsIdentity(const NodeDef& node) {
   const auto& op = node.op();
@@ -162,14 +176,26 @@ bool IsMatMul(const NodeDef& node) {
          op == "SparseMatMul";
 }
 
+bool IsMax(const NodeDef& node) { return node.op() == "Max"; }
+
 bool IsMaximum(const NodeDef& node) { return node.op() == "Maximum"; }
+
+bool IsMean(const NodeDef& node) { return node.op() == "Mean"; }
 
 bool IsMerge(const NodeDef& node) {
   const auto& op = node.op();
   return op == "Merge" || op == "RefMerge";
 }
 
+bool IsMin(const NodeDef& node) { return node.op() == "Min"; }
+
 bool IsMinimum(const NodeDef& node) { return node.op() == "Minimum"; }
+
+bool IsMirrorPad(const NodeDef& node) { return node.op() == "MirrorPad"; }
+
+bool IsMirrorPadGrad(const NodeDef& node) {
+  return node.op() == "MirrorPadGrad";
+}
 
 bool IsMod(const NodeDef& node) { return node.op() == "Mod"; }
 
@@ -184,7 +210,10 @@ bool IsNextIteration(const NodeDef& node) {
   return op == "NextIteration" || op == "RefNextIteration";
 }
 
-bool IsPad(const NodeDef& node) { return node.op() == "Pad"; }
+bool IsPad(const NodeDef& node) {
+  const auto& op = node.op();
+  return op == "Pad" || op == "PadV2";
+}
 
 bool IsPlaceholder(const NodeDef& node) {
   const auto& op = node.op();
@@ -195,6 +224,8 @@ bool IsPlaceholder(const NodeDef& node) {
 bool IsPolygamma(const NodeDef& node) { return node.op() == "Polygamma"; }
 
 bool IsPow(const NodeDef& node) { return node.op() == "Pow"; }
+
+bool IsProd(const NodeDef& node) { return node.op() == "Prod"; }
 
 bool IsReal(const NodeDef& node) { return node.op() == "Real"; }
 
@@ -223,7 +254,11 @@ bool IsRestore(const NodeDef& node) {
           node.op() == "RestoreSlice");
 }
 
+bool IsReverseV2(const NodeDef& node) { return node.op() == "ReverseV2"; }
+
 bool IsRsqrtGrad(const NodeDef& node) { return node.op() == "RsqrtGrad"; }
+
+bool IsSelect(const NodeDef& node) { return node.op() == "Select"; }
 
 bool IsSeluGrad(const NodeDef& node) { return node.op() == "SeluGrad"; }
 
@@ -243,6 +278,8 @@ bool IsSoftsignGrad(const NodeDef& node) { return node.op() == "SoftsignGrad"; }
 
 bool IsSplit(const NodeDef& node) { return node.op() == "Split"; }
 
+bool IsSplitV(const NodeDef& node) { return node.op() == "SplitV"; }
+
 bool IsSqrtGrad(const NodeDef& node) { return node.op() == "SqrtGrad"; }
 
 bool IsSquaredDifference(const NodeDef& node) {
@@ -256,6 +293,12 @@ bool IsStopGradient(const NodeDef& node) {
   return op == "StopGradient" || op == "PreventGradient";
 }
 
+bool IsStridedSlice(const NodeDef& node) { return node.op() == "StridedSlice"; }
+
+bool IsStridedSliceGrad(const NodeDef& node) {
+  return node.op() == "StridedSliceGrad";
+}
+
 bool IsSub(const NodeDef& node) { return node.op() == "Sub"; }
 
 bool IsSum(const NodeDef& node) { return node.op() == "Sum"; }
@@ -266,6 +309,8 @@ bool IsSwitch(const NodeDef& node) {
 }
 
 bool IsTanhGrad(const NodeDef& node) { return node.op() == "TanhGrad"; }
+
+bool IsTile(const NodeDef& node) { return node.op() == "Tile"; }
 
 bool IsTranspose(const NodeDef& node) { return node.op() == "Transpose"; }
 

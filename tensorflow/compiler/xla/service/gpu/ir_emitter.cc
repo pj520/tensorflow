@@ -605,6 +605,14 @@ Status IrEmitter::HandleConvolution(HloInstruction* convolution) {
       "Hit a case for convolution that is not implemented on GPU.");
 }
 
+Status IrEmitter::HandleFft(HloInstruction* fft) {
+  if (ShapeUtil::HasZeroElements(fft->shape())) {
+    // Emit no code for an empty output.
+    return Status::OK();
+  }
+  return Unimplemented("Hit a case for fft that is not implemented on GPU.");
+}
+
 Status IrEmitter::HandleCrossReplicaSum(HloInstruction* crs) {
   // TODO(b/33011107): Support cross replica sum on GPU.
   return Unimplemented(
@@ -725,6 +733,29 @@ Status IrEmitter::HandleRng(HloInstruction* random) {
                  .MakeElementGenerator(random, operand_to_generator),
              GetIrArray(*random, *random), &ir_builder_)
       .EmitLoop(IrName(random));
+}
+
+Status IrEmitter::HandleBatchNormInference(HloInstruction*) {
+  return Unimplemented(
+      "The GPU backend does not implement BatchNormInference directly.  It "
+      "should be lowered before IR emission to HLO-soup using "
+      "BatchNormRewriter or to a cudnn CustomCall using "
+      "CudnnBatchNormRewriter.");
+}
+
+Status IrEmitter::HandleBatchNormTraining(HloInstruction*) {
+  return Unimplemented(
+      "The GPU backend does not implement BatchNormTraining directly.  It "
+      "should be lowered before IR emission to HLO-soup using "
+      "BatchNormRewriter or to a cudnn CustomCall using "
+      "CudnnBatchNormRewriter.");
+}
+
+Status IrEmitter::HandleBatchNormGrad(HloInstruction*) {
+  return Unimplemented(
+      "The GPU backend does not implement BatchNormGrad directly.  It should "
+      "be lowered before IR emission to HLO-soup (using BatchNormRewriter) or "
+      "to a cudnn CustomCall using CudnnBatchNormRewriter.");
 }
 
 Status IrEmitter::HandleConditional(HloInstruction* conditional) {

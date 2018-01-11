@@ -25,6 +25,7 @@ limitations under the License.
 #include <iosfwd>
 #include <list>
 #include <memory>
+#include <set>
 #include <string>
 #include <tuple>
 #include <unordered_map>
@@ -63,6 +64,7 @@ class HloPrintOptions {
   // compact operands, no indentation.
   HloPrintOptions()
       : print_large_constants_(false),
+        print_subcomputation_references_(true),
         print_metadata_(true),
         compact_operands_(false),
         print_operand_shape_(true),
@@ -73,6 +75,7 @@ class HloPrintOptions {
   static HloPrintOptions ShortParsable() {
     return HloPrintOptions()
         .set_print_large_constants(true)
+        .set_print_subcomputation_references(true)
         .set_print_metadata(false)
         .set_print_operand_shape(false)
         .set_print_program_shape(false)
@@ -82,6 +85,17 @@ class HloPrintOptions {
   // If true, large constants will be printed out.
   HloPrintOptions& set_print_large_constants(bool value) {
     print_large_constants_ = value;
+    return *this;
+  }
+
+  // If true, the names of subcomputations (e.g. a fusion node's fused
+  // computation) won't be printed.  This makes the resulting text not parsable.
+  //
+  // A CustomCall's call target is printed even if
+  // print_subcomputation_references is false, because the call target isn't an
+  // HloComputation.
+  HloPrintOptions& set_print_subcomputation_references(bool value) {
+    print_subcomputation_references_ = value;
     return *this;
   }
 
@@ -123,6 +137,9 @@ class HloPrintOptions {
   }
 
   bool print_large_constants() const { return print_large_constants_; }
+  bool print_subcomputation_references() const {
+    return print_subcomputation_references_;
+  }
   bool print_metadata() const { return print_metadata_; }
   bool compact_operands() const { return compact_operands_; }
   bool print_operand_shape() const { return print_operand_shape_; }
@@ -132,6 +149,7 @@ class HloPrintOptions {
 
  private:
   bool print_large_constants_;
+  bool print_subcomputation_references_;
   bool print_metadata_;
   bool compact_operands_;
   bool print_operand_shape_;
@@ -243,6 +261,11 @@ class HloInstruction {
       const Shape& shape, HloInstruction* lhs, HloInstruction* rhs,
       const Window& window,
       const ConvolutionDimensionNumbers& dimension_numbers);
+
+  // Creates an FFT op, of the type indicated by fft_type.
+  static std::unique_ptr<HloInstruction> CreateFft(
+      const Shape& shape, HloInstruction* operand, FftType fft_type,
+      tensorflow::gtl::ArraySlice<int64> fft_length);
 
   // Creates a dot op with operands 'lhs' and 'rhs' with contracting and batch
   // dimensions specified in 'dimension_numbers'.
@@ -947,6 +970,17 @@ class HloInstruction {
   }
   const std::vector<int64>& slice_strides() const { return slice_strides_; }
 
+  // Returns the flag that describes whether a slice must be lowered into an
+  // offset into the original operand.
+  bool IsInPlaceSlice() const { return is_in_place_slice_; }
+
+  // Sets and returns the flag that describes whether a slice must be lowered
+  // into an offset into the original operand.
+  bool SetIsInPlaceSlice(bool value) {
+    is_in_place_slice_ = value;
+    return value;
+  }
+
   // Returns the size of the slice in the given dimension for a dynamic
   // slice node.
   //
@@ -1001,6 +1035,16 @@ class HloInstruction {
   const ConvolutionDimensionNumbers& convolution_dimension_numbers() const {
     CHECK(convolution_dimension_numbers_ != nullptr);
     return *convolution_dimension_numbers_;
+  }
+
+  FftType fft_type() const {
+    CHECK_EQ(HloOpcode::kFft, opcode_);
+    return fft_type_;
+  }
+
+  const std::vector<int64>& fft_length() const {
+    CHECK_EQ(HloOpcode::kFft, opcode_);
+    return fft_length_;
   }
 
   // Returns the dump string of the convolution dimension numbers.
@@ -1275,10 +1319,19 @@ class HloInstruction {
   // Describes the dimension numbers used for a dot.
   std::unique_ptr<DotDimensionNumbers> dot_dimension_numbers_;
 
+  // Describes FFT type for an FFT instruction.
+  FftType fft_type_ = FftType::FFT;
+
+  // Indicates the FFT length for an FFT instruction.
+  std::vector<int64> fft_length_;
+
   // Describes the [begin, end) index range for a slice.
   std::vector<int64> slice_starts_;
   std::vector<int64> slice_limits_;
   std::vector<int64> slice_strides_;
+
+  // Describes whether the slice can be lowered to an offset into the operand.
+  bool is_in_place_slice_ = false;
 
   // The bit sizes for a reduce-precision operation.
   int32 exponent_bits_ = 0;
@@ -1398,6 +1451,10 @@ using HloInstructionMap = std::map<HloInstruction*, ValueT, HloPtrComparator>;
 template <typename ValueT>
 using ConstHloInstructionMap =
     std::map<const HloInstruction*, ValueT, HloPtrComparator>;
+
+using HloInstructionSet = std::set<HloInstruction*, HloPtrComparator>;
+using ConstHloInstructionSet =
+    std::set<const HloInstruction*, HloPtrComparator>;
 
 }  // namespace xla
 

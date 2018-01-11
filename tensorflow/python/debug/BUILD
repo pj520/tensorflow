@@ -42,6 +42,7 @@ py_library(
 py_library(
     name = "debug_pip",
     deps = [
+        ":cli_test_utils",
         ":debug_py",
         ":grpc_debug_test_server",
         ":offline_analyzer",
@@ -204,6 +205,7 @@ py_library(
         ":debugger_cli_common",
         ":tensor_format",
         "//tensorflow/python:framework_for_generated_wrappers",
+        "//tensorflow/python:platform",
         "//tensorflow/python:variables",
         "//third_party/py/numpy",
         "@six_archive//:six",
@@ -640,8 +642,11 @@ py_test(
     size = "small",
     srcs = ["cli/curses_ui_test.py"],
     srcs_version = "PY2AND3",
-    tags = ["no_windows"],
+    tags = [
+        "no_windows",
+    ],
     deps = [
+        ":cli_test_utils",
         ":curses_ui",
         ":debugger_cli_common",
         ":tensor_format",
@@ -831,6 +836,7 @@ py_test(
     srcs = ["cli/tensor_format_test.py"],
     srcs_version = "PY2AND3",
     deps = [
+        ":cli_test_utils",
         ":debug_data",
         ":tensor_format",
         "//tensorflow/core:protos_all_py",
@@ -874,6 +880,12 @@ py_test(
     ],
 )
 
+py_library(
+    name = "cli_test_utils",
+    srcs = ["cli/cli_test_utils.py"],
+    srcs_version = "PY2AND3",
+)
+
 cuda_py_test(
     name = "analyzer_cli_test",
     size = "small",
@@ -881,6 +893,7 @@ cuda_py_test(
     additional_deps = [
         ":analyzer_cli",
         ":cli_config",
+        ":cli_test_utils",
         ":command_parser",
         ":debug_data",
         ":debug_utils",

@@ -99,6 +99,7 @@ class HloParser {
     kString,
     kBracedInt64List,
     kHloComputation,
+    kFftType,
     kWindow,
     kConvolutionDimensionNumbers,
     kSharding,
@@ -178,6 +179,7 @@ class HloParser {
   bool ParseString(string* result);
   bool ParseShape(Shape* result);
   bool ParseOpcode(HloOpcode* result);
+  bool ParseFftType(FftType* result);
   bool ParseFusionKind(HloInstruction::FusionKind* result);
   bool ParseRandomDistribution(RandomDistribution* result);
   bool ParseInt64(int64* result);
@@ -492,7 +494,6 @@ bool HloParser::ParseInstruction(HloComputation::Builder* builder,
     case HloOpcode::kLe:
     case HloOpcode::kLt:
     case HloOpcode::kNe:
-    case HloOpcode::kDot:
     case HloOpcode::kMaximum:
     case HloOpcode::kMinimum:
     case HloOpcode::kPower:
@@ -684,6 +685,20 @@ bool HloParser::ParseInstruction(HloComputation::Builder* builder,
       }
       instruction = builder->AddInstruction(HloInstruction::CreateConvolve(
           shape, /*lhs=*/operands[0], /*rhs=*/operands[1], *window, *dnums));
+      break;
+    }
+    case HloOpcode::kFft: {
+      optional<FftType> fft_type;
+      optional<std::vector<int64>> fft_length;
+      attrs["fft_type"] = {/*required=*/true, AttrTy::kFftType, &fft_type};
+      attrs["fft_length"] = {/*required=*/true, AttrTy::kBracedInt64List,
+                             &fft_length};
+      if (!ParseOperands(&operands, /*expected_size=*/1) ||
+          !ParseAttributes(attrs)) {
+        return false;
+      }
+      instruction = builder->AddInstruction(HloInstruction::CreateFft(
+          shape, operands[0], *fft_type, *fft_length));
       break;
     }
     case HloOpcode::kBroadcast: {
@@ -966,6 +981,47 @@ bool HloParser::ParseInstruction(HloComputation::Builder* builder,
       }
       instruction = builder->AddInstruction(HloInstruction::CreateCustomCall(
           shape, operands, *custom_call_target));
+      break;
+    }
+    case HloOpcode::kDot: {
+      optional<std::vector<int64>> lhs_contracting_dims;
+      attrs["lhs_contracting_dims"] = {
+          /*required=*/false, AttrTy::kBracedInt64List, &lhs_contracting_dims};
+      optional<std::vector<int64>> rhs_contracting_dims;
+      attrs["rhs_contracting_dims"] = {
+          /*required=*/false, AttrTy::kBracedInt64List, &rhs_contracting_dims};
+      optional<std::vector<int64>> lhs_batch_dims;
+      attrs["lhs_batch_dims"] = {/*required=*/false, AttrTy::kBracedInt64List,
+                                 &lhs_batch_dims};
+      optional<std::vector<int64>> rhs_batch_dims;
+      attrs["rhs_batch_dims"] = {/*required=*/false, AttrTy::kBracedInt64List,
+                                 &rhs_batch_dims};
+
+      if (!ParseOperands(&operands, /*expected_size=*/2) ||
+          !ParseAttributes(attrs)) {
+        return false;
+      }
+
+      DotDimensionNumbers dnum;
+      if (lhs_contracting_dims) {
+        *dnum.mutable_lhs_contracting_dimensions() = {
+            lhs_contracting_dims->begin(), lhs_contracting_dims->end()};
+      }
+      if (rhs_contracting_dims) {
+        *dnum.mutable_rhs_contracting_dimensions() = {
+            rhs_contracting_dims->begin(), rhs_contracting_dims->end()};
+      }
+      if (lhs_batch_dims) {
+        *dnum.mutable_lhs_batch_dimensions() = {lhs_batch_dims->begin(),
+                                                lhs_batch_dims->end()};
+      }
+      if (rhs_batch_dims) {
+        *dnum.mutable_rhs_batch_dimensions() = {rhs_batch_dims->begin(),
+                                                rhs_batch_dims->end()};
+      }
+
+      instruction = builder->AddInstruction(
+          HloInstruction::CreateDot(shape, operands[0], operands[1], dnum));
       break;
     }
     case HloOpcode::kTrace:
@@ -1268,7 +1324,7 @@ bool HloParser::SetValueInLiteralHelper(ParsedElemT value, int64 linear_index,
         PrimitiveType_Name(literal->shape().element_type())));
   }
 
-  literal->GetMutableArraySlice<LiteralNativeT>().at(linear_index) =
+  literal->data<LiteralNativeT>().at(linear_index) =
       static_cast<LiteralNativeT>(value);
   return true;
 }
@@ -1459,7 +1515,7 @@ bool HloParser::ParseNonTupleLiteral(std::unique_ptr<Literal>* literal,
             return false;
           }
         } else {
-          return TokenError(StrCat("unsupported premitive type ",
+          return TokenError(StrCat("unsupported primitive type ",
                                    PrimitiveType_Name(shape.element_type())));
         }
         break;
@@ -1632,6 +1688,14 @@ bool HloParser::ParseAttributeHelper(
         static_cast<optional<HloComputation*>*>(attr_out_ptr)->emplace(result);
         return true;
       }
+      case AttrTy::kFftType: {
+        FftType result;
+        if (!ParseFftType(&result)) {
+          return false;
+        }
+        static_cast<optional<FftType>*>(attr_out_ptr)->emplace(result);
+        return true;
+      }
       case AttrTy::kWindow: {
         Window result;
         if (!ParseWindow(&result)) {
@@ -1787,7 +1851,7 @@ bool HloParser::ParseWindow(Window* window) {
       if (field_name == "rhs_reversal") {
         return ParseDxD("rhs_reversal", &rhs_reversal);
       }
-      return Error(loc, StrCat("unexpected attribute name: ", field_name));
+      return Error(attr_loc, StrCat("unexpected attribute name: ", field_name));
     }();
     if (!ok) {
       return false;
@@ -2245,6 +2309,19 @@ bool HloParser::ParseOpcode(HloOpcode* result) {
                status_or_result.status().error_message().c_str()));
   }
   *result = status_or_result.ValueOrDie();
+  lexer_.Lex();
+  return true;
+}
+
+bool HloParser::ParseFftType(FftType* result) {
+  VLOG(1) << "ParseFftType";
+  if (lexer_.GetKind() != TokKind::kIdent) {
+    return TokenError("expects fft type");
+  }
+  string val = lexer_.GetStrVal();
+  if (!FftType_Parse(val, result) || !FftType_IsValid(*result)) {
+    return TokenError(Printf("expects fft type but sees: %s", val.c_str()));
+  }
   lexer_.Lex();
   return true;
 }

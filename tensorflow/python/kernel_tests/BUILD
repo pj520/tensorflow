@@ -369,6 +369,7 @@ tf_py_test(
     srcs = ["fractional_avg_pool_op_test.py"],
     additional_deps = [
         "//third_party/py/numpy",
+        "//tensorflow/python:array_ops",
         "//tensorflow/python:client_testlib",
         "//tensorflow/python:framework_for_generated_wrappers",
         "//tensorflow/python:nn_grad",
@@ -383,6 +384,7 @@ tf_py_test(
     srcs = ["fractional_max_pool_op_test.py"],
     additional_deps = [
         "//third_party/py/numpy",
+        "//tensorflow/python:array_ops",
         "//tensorflow/python:client_testlib",
         "//tensorflow/python:framework_for_generated_wrappers",
         "//tensorflow/python:nn_grad",
@@ -603,6 +605,23 @@ tf_py_test(
     name = "parsing_ops_test",
     size = "small",
     srcs = ["parsing_ops_test.py"],
+    additional_deps = [
+        "//third_party/py/numpy",
+        "//tensorflow/core:protos_all_py",
+        "//tensorflow/python:array_ops",
+        "//tensorflow/python:client_testlib",
+        "//tensorflow/python:errors",
+        "//tensorflow/python:framework",
+        "//tensorflow/python:framework_for_generated_wrappers",
+        "//tensorflow/python:parsing_ops",
+        "//tensorflow/python:platform",
+    ],
+)
+
+tf_py_test(
+    name = "parse_single_example_op_test",
+    size = "small",
+    srcs = ["parse_single_example_op_test.py"],
     additional_deps = [
         "//third_party/py/numpy",
         "//tensorflow/core:protos_all_py",
@@ -2181,6 +2200,7 @@ cuda_py_test(
     srcs = ["atrous_convolution_test.py"],
     additional_deps = [
         "//third_party/py/numpy",
+        "//tensorflow/python:array_ops",
         "//tensorflow/python:client_testlib",
         "//tensorflow/python:framework_for_generated_wrappers",
         "//tensorflow/python:nn_grad",

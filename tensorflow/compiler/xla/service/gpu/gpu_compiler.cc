@@ -18,12 +18,14 @@ limitations under the License.
 #include <stdlib.h>
 #include <atomic>
 #include <functional>
+#include <mutex>  // NOLINT(build/c++11): only using std::call_once, not mutex.
 #include <utility>
 
 #include "llvm/IR/DiagnosticInfo.h"
 #include "llvm/IR/DiagnosticPrinter.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/Verifier.h"
 #include "tensorflow/compiler/xla/protobuf_util.h"
 #include "tensorflow/compiler/xla/ptr_util.h"
 #include "tensorflow/compiler/xla/service/algebraic_simplifier.h"
@@ -34,9 +36,11 @@ limitations under the License.
 #include "tensorflow/compiler/xla/service/dot_decomposer.h"
 #include "tensorflow/compiler/xla/service/flatten_call_graph.h"
 #include "tensorflow/compiler/xla/service/gpu/convolution_folding.h"
+#include "tensorflow/compiler/xla/service/gpu/cudnn_batchnorm_rewriter.h"
 #include "tensorflow/compiler/xla/service/gpu/fusion_merger.h"
 #include "tensorflow/compiler/xla/service/gpu/gpu_copy_insertion.h"
 #include "tensorflow/compiler/xla/service/gpu/gpu_executable.h"
+#include "tensorflow/compiler/xla/service/gpu/gpu_hlo_support_checker.h"
 #include "tensorflow/compiler/xla/service/gpu/gpu_layout_assignment.h"
 #include "tensorflow/compiler/xla/service/gpu/hlo_schedule.h"
 #include "tensorflow/compiler/xla/service/gpu/instruction_fusion.h"
@@ -65,6 +69,7 @@ limitations under the License.
 #include "tensorflow/compiler/xla/service/transpose_folding.h"
 #include "tensorflow/compiler/xla/service/tuple_simplifier.h"
 #include "tensorflow/compiler/xla/service/while_loop_simplifier.h"
+#include "tensorflow/compiler/xla/service/zero_sized_hlo_elimination.h"
 #include "tensorflow/compiler/xla/status_macros.h"
 #include "tensorflow/compiler/xla/types.h"
 #include "tensorflow/compiler/xla/util.h"
@@ -75,9 +80,11 @@ limitations under the License.
 #include "tensorflow/core/platform/cuda_libdevice_path.h"
 #include "tensorflow/core/platform/env.h"
 #include "tensorflow/core/platform/logging.h"
+#include "tensorflow/core/platform/regexp.h"
 #include "tensorflow/core/platform/stream_executor_no_cuda.h"
 #include "tensorflow/core/platform/subprocess.h"
 #include "tensorflow/core/platform/tracing.h"
+#include "tensorflow/stream_executor/cuda/cuda_diagnostics.h"
 
 namespace se = ::perftools::gputools;
 
@@ -132,6 +139,7 @@ tensorflow::Status OptimizeHloModule(
   {
     HloPassPipeline pipeline("optimization");
     pipeline.AddInvariantChecker<HloVerifier>(shape_size_function);
+    pipeline.AddPass<GpuHloSupportChecker>();
     ReducePrecisionInsertion::AddPasses(
         &pipeline, hlo_module->config().debug_options(),
         ReducePrecisionInsertion::PassTiming::BEFORE_OPTIMIZATION);
@@ -144,13 +152,22 @@ tensorflow::Status OptimizeHloModule(
           pipeline.AddPass<HloPassFix<HloPassPipeline>>("simplification");
       pass.AddInvariantChecker<HloVerifier>(shape_size_function);
 
-      // TODO(b/62764704): Do not expand on GPU, use cuDNN's BatchNorm APIs
-      // instead.
+      // If cudnn batchnorms are enabled, rewrite batchnorm HLOs to cudnn calls
+      // where possible.  Not every batchnorm op can be implemented as a call to
+      // cudnn, so decompose any remaining batchnorm ops into a soup of HLOs.
+      if (hlo_module->config().debug_options().xla_gpu_use_cudnn_batchnorm()) {
+        pass.AddPass<CudnnBatchNormRewriter>();
+      }
       pass.AddPass<BatchNormExpander>(
           /*rewrite_training_op=*/true,
           /*rewrite_inference_op=*/true,
           /*rewrite_grad_op=*/true,
           /*use_fusion=*/false);
+
+      // BatchNormExpander can create zero-sized ops, so zero-sized HLO
+      // elimination has to come after that pass.
+      pipeline.AddPass<ZeroSizedHloElimination>();
+
       pass.AddPass<AlgebraicSimplifier>(
           /*is_layout_sensitive=*/false,
           [](const Shape&, const Shape&) { return false; });
@@ -230,6 +247,93 @@ tensorflow::Status PrepareHloModuleForIrEmitting(
   return pipeline.Run(hlo_module).status();
 }
 
+// Prints a warning if the ptxas at ptxas_path has known bugs.
+//
+// Only prints a warning the first time it's called for a particular value of
+// ptxas_path.
+void WarnIfBadPtxasVersion(const string& ptxas_path) {
+  static tensorflow::mutex mu(tensorflow::LINKER_INITIALIZED);
+  static std::unordered_set<string>* seen_ptxas_paths GUARDED_BY(mu) =
+      new std::unordered_set<string>();
+
+  tensorflow::mutex_lock lock(mu);
+  if (!seen_ptxas_paths->insert(ptxas_path).second) {
+    // Already checked this ptx binary, nothing to do.
+    return;
+  }
+
+  tensorflow::SubProcess ptxas;
+  ptxas.SetProgram(ptxas_path, {ptxas_path, "--version"});
+  ptxas.SetChannelAction(tensorflow::CHAN_STDOUT, tensorflow::ACTION_PIPE);
+  if (!ptxas.Start()) {
+    LOG(WARNING) << "Couldn't invoke " << ptxas_path << " --version";
+    return;
+  }
+
+  string out;
+  int exit_code = ptxas.Communicate(/*stdin_input=*/nullptr, &out,
+                                    /*stderr_output=*/nullptr);
+  if (exit_code != 0) {
+    LOG(WARNING) << "Running " << ptxas_path << " --version returned "
+                 << exit_code;
+    return;
+  }
+
+  int64 vmaj, vmin, vdot;
+  string vmaj_str, vmin_str, vdot_str;
+  using tensorflow::strings::safe_strto64;
+  if (!RE2::PartialMatch(out, R"(\bV(\d+)\.(\d+)\.(\d+)\b)", &vmaj_str,
+                         &vmin_str, &vdot_str) ||
+      !safe_strto64(vmaj_str, &vmaj) || !safe_strto64(vmin_str, &vmin) ||
+      !safe_strto64(vdot_str, &vdot)) {
+    LOG(WARNING) << "Couldn't parse ptxas version in output of " << ptxas_path
+                 << " --version:\n"
+                 << out;
+    return;
+  }
+
+  // ptxas 9.0 before 9.0.276 miscompiles some address calculations with large
+  // offsets (e.g. "load ptr + large_constant"), b/70245379.
+  if (vmaj == 9 && vmin == 0 && vdot < 276) {
+    LOG(WARNING) << "*** WARNING *** You are using ptxas " << vmaj << "."
+                 << vmin << "." << vdot
+                 << ", which is in range [9.0.0, 9.0.276). These versions are "
+                    "known to miscompile XLA code, leading to incorrect "
+                    "results or invalid-address errors.";
+  }
+}
+
+// Prints a warning if the ptx->sass JIT in the driver has known bugs.
+//
+// Using such a driver only a problem if we fail to use ptxas to compile our ptx
+// and have to use the driver instead, so you should only call this function if
+// we're going to use the driver JIT.
+//
+// Only prints a warning the first time it's called.
+void WarnIfBadDriverJITVersion() {
+  static std::once_flag run_once;
+  std::call_once(run_once, [] {
+    auto version_or_status = se::cuda::Diagnostician::FindKernelDriverVersion();
+    if (!version_or_status.ok()) {
+      LOG(WARNING) << "Couldn't read CUDA driver version.";
+      return;
+    }
+    se::cuda::DriverVersion version = version_or_status.ValueOrDie();
+
+    // The driver JIT in 384 before 384.108 miscompiles some address
+    // calculations with large offsets (e.g. "load ptr + large_constant"),
+    // b/70245379.
+    if (std::get<0>(version) == 384 && std::get<1>(version) < 108) {
+      LOG(WARNING)
+          << "*** WARNING *** Invoking the PTX->SASS JIT from driver version "
+          << se::cuda::DriverVersionToString(version)
+          << ", which is in range [384.0.0, 384.108.0). These versions are "
+             "known to miscompile XLA code, leading to incorrect results or "
+             "invalid-address errors.";
+    }
+  });
+}
+
 // Compiles the given PTX string using ptxas and returns the resulting machine
 // code (i.e. a cubin) as a byte array.
 StatusOr<std::vector<uint8>> CompilePtx(const string& ptx, int cc_major,
@@ -240,6 +344,8 @@ StatusOr<std::vector<uint8>> CompilePtx(const string& ptx, int cc_major,
   VLOG(2) << "Using ptxas at " << ptxas_path;
   auto env = tensorflow::Env::Default();
   TF_RETURN_IF_ERROR(env->FileExists(ptxas_path));
+
+  WarnIfBadPtxasVersion(ptxas_path);
 
   // Write ptx into a temporary file.
   string ptx_path;
@@ -395,6 +501,20 @@ StatusOr<std::unique_ptr<Executable>> GpuCompiler::RunBackend(
         /*optimized=*/false));
   }
 
+  {
+    XLA_SCOPED_LOGGING_TIMER("GpuCompiler::RunBackend - Running LLVM verifier");
+
+    std::string err;
+    llvm::raw_string_ostream err_stream(err);
+
+    // verifyModule() returns true if the module is broken.
+    TF_RET_CHECK(!llvm::verifyModule(llvm_module, &err_stream))
+        << "Invalid LLVM IR before optimizations:\n"
+        << err_stream.str()
+        << "\nThis probably indicates a bug in the HLO -> LLVM IR lowering. "
+           "Rerun with --xla_dump_ir_to to get the IR. ";
+  }
+
   string libdevice_dir;
   {
     tensorflow::mutex_lock lock(mutex_);
@@ -472,6 +592,7 @@ StatusOr<std::unique_ptr<Executable>> GpuCompiler::RunBackend(
 
   if (module->config().hlo_profiling_enabled()) {
     HloCostAnalysis cost_analysis(ShapeSizeBytesFunction());
+    TF_RETURN_IF_ERROR(module->entry_computation()->Accept(&cost_analysis));
     profile_index_map = MakeUnique<HloProfileIndexMap>(*module);
     profile_printer =
         CreateHloProfilePrinter(*profile_index_map, cost_analysis);
@@ -543,6 +664,10 @@ std::vector<uint8> GpuCompiler::CompilePtxOrGetCachedResult(const string& ptx,
                    "GPU driver compile the ptx. "
                 << maybe_cubin.status();
           }
+
+          // We're going to use the driver to JIT our PTX->SASS, so warn if
+          // the JIT in the driver has known bugs.
+          WarnIfBadDriverJITVersion();
         }
       }
       cache_value->compilation_done = true;

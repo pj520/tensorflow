@@ -43,6 +43,10 @@ class Thunk {
   enum class Kind {
     kConvolution,
     kCopy,
+    kCudnnBatchNormBackward,
+    kCudnnBatchNormForwardInference,
+    kCudnnBatchNormForwardTraining,
+    kFft,
     kGemm,
     kInfeed,
     kKernel,

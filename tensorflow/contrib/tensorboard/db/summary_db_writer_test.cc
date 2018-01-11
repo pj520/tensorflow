@@ -48,17 +48,21 @@ class FakeClockEnv : public EnvWrapper {
 
 class SummaryDbWriterTest : public ::testing::Test {
  protected:
-  void SetUp() override { db_ = Sqlite::Open(":memory:").ValueOrDie(); }
+  void SetUp() override {
+    TF_ASSERT_OK(Sqlite::Open(":memory:", SQLITE_OPEN_READWRITE, &db_));
+  }
 
   void TearDown() override {
     if (writer_ != nullptr) {
       writer_->Unref();
       writer_ = nullptr;
     }
+    db_->Unref();
+    db_ = nullptr;
   }
 
   int64 QueryInt(const string& sql) {
-    SqliteStatement stmt = db_->Prepare(sql);
+    SqliteStatement stmt = db_->PrepareOrDie(sql);
     bool is_done;
     Status s = stmt.Step(&is_done);
     if (!s.ok() || is_done) {
@@ -69,7 +73,7 @@ class SummaryDbWriterTest : public ::testing::Test {
   }
 
   double QueryDouble(const string& sql) {
-    SqliteStatement stmt = db_->Prepare(sql);
+    SqliteStatement stmt = db_->PrepareOrDie(sql);
     bool is_done;
     Status s = stmt.Step(&is_done);
     if (!s.ok() || is_done) {
@@ -80,7 +84,7 @@ class SummaryDbWriterTest : public ::testing::Test {
   }
 
   string QueryString(const string& sql) {
-    SqliteStatement stmt = db_->Prepare(sql);
+    SqliteStatement stmt = db_->PrepareOrDie(sql);
     bool is_done;
     Status s = stmt.Step(&is_done);
     if (!s.ok() || is_done) {
@@ -91,7 +95,7 @@ class SummaryDbWriterTest : public ::testing::Test {
   }
 
   FakeClockEnv env_;
-  std::shared_ptr<Sqlite> db_;
+  Sqlite* db_ = nullptr;
   SummaryWriterInterface* writer_ = nullptr;
 };
 
